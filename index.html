@@ -4,212 +4,175 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#080808">
+  <meta name="theme-color" content="#09090d">
+  <meta name="description" content="My Media Gallery — Photos, videos and audio.">
   <title>My Media Gallery</title>
   <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
-
-  <!-- SIDEBAR -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
-      <h2>My Media Gallery</h2>
+      <a class="brand" href="#" data-page="home">MY MEDIA</a>
       <button id="close-menu" class="icon-button" aria-label="Close menu">×</button>
     </div>
 
-    <nav class="sidebar-nav">
-      <button class="nav-item active" data-page="home">⌂ Home</button>
-      <button class="nav-item" data-page="Photos">▧ Photos</button>
-      <button class="nav-item" data-page="Videos">▷ Videos</button>
-      <button class="nav-item" data-page="Audio">♫ Audio</button>
-      <button class="nav-item" data-page="favorites">♡ Favorites</button>
-      <button class="nav-item" data-page="developer">ⓘ Developer Info</button>
+    <nav class="navigation">
+      <button class="nav-link active" data-page="home">Home</button>
+      <div class="nav-label">LIBRARY</div>
+      <button class="nav-link" data-page="Photos">Photos</button>
+      <button class="nav-link" data-page="Videos">Videos</button>
+      <button class="nav-link" data-page="Audio">Audio</button>
+      <div class="nav-label">PERSONAL</div>
+      <button class="nav-link" data-page="favorites">Favorites</button>
+      <button class="nav-link" data-page="developer">Developer Information</button>
     </nav>
 
-    <div class="sidebar-bottom">
-      <button id="admin-open" class="primary-button">Admin Login</button>
-      <p>Created by <span id="creator-name">The site owner</span></p>
+    <div class="sidebar-footer">
+      <button id="admin-open" class="admin-link">Administrator Login</button>
+      <span id="creator-name">My Media Gallery</span>
     </div>
   </aside>
 
-  <div class="sidebar-overlay" id="sidebar-overlay"></div>
+  <div id="sidebar-overlay" class="sidebar-overlay"></div>
 
-  <!-- MAIN CONTENT -->
   <main class="main-content">
-
     <header class="topbar">
-      <button id="mobile-menu" class="icon-button" aria-label="Open menu">
-        <span class="hamburger">☰</span>
+      <button id="mobile-menu" class="menu-button" aria-label="Open menu">
+        <span></span><span></span><span></span>
       </button>
-
       <h1 id="page-title">Home</h1>
-
-      <div class="topbar-actions">
-        <span id="file-count">0</span>
-        <span>Media</span>
-      </div>
+      <span id="file-count" class="file-count">0 items</span>
     </header>
 
-    <!-- HOME PAGE -->
     <section id="home-page" class="page active">
-
       <div class="welcome-section">
-        <h2>Welcome to My Media Gallery</h2>
+        <p class="eyebrow">YOUR PERSONAL COLLECTION</p>
+        <h2>My Media Gallery</h2>
         <p>Explore photos, videos and audio in one place.</p>
       </div>
 
-      <div class="category-cards">
+      <div class="category-grid">
         <button class="category-card" data-page="Photos">
-          <span class="category-icon">▧</span>
-          <h3>Photos</h3>
-          <p>Explore images</p>
+          <span class="category-number">01</span>
+          <strong>Photos</strong>
+          <span>Explore photographs</span>
         </button>
-
         <button class="category-card" data-page="Videos">
-          <span class="category-icon">▷</span>
-          <h3>Videos</h3>
-          <p>Watch videos</p>
+          <span class="category-number">02</span>
+          <strong>Videos</strong>
+          <span>Watch video collection</span>
         </button>
-
         <button class="category-card" data-page="Audio">
-          <span class="category-icon">♫</span>
-          <h3>Audio</h3>
-          <p>Listen to audio</p>
+          <span class="category-number">03</span>
+          <strong>Audio</strong>
+          <span>Listen to audio files</span>
         </button>
       </div>
 
       <div class="section-heading">
-        <h2>All Media</h2>
+        <h2>Recent Media</h2>
+        <input id="search" type="search" placeholder="Search media..." aria-label="Search media">
       </div>
-
-      <div class="search-container">
-        <input id="search" type="search" placeholder="Search media...">
-      </div>
-
-      <div id="gallery" class="gallery">
-        <div class="empty-state">Loading media...</div>
-      </div>
-
+      <div id="gallery" class="media-grid"></div>
     </section>
 
-    <!-- CATEGORY / FAVORITES PAGE -->
     <section id="media-page" class="page">
       <div class="section-heading">
         <h2 id="media-heading">Photos</h2>
+        <input id="category-search" type="search" placeholder="Search..." aria-label="Search this category">
       </div>
-
-      <div class="search-container">
-        <input id="category-search" type="search" placeholder="Search media...">
-      </div>
-
-      <div id="category-gallery" class="gallery"></div>
+      <div id="category-gallery" class="media-grid"></div>
     </section>
 
-    <!-- DEVELOPER INFORMATION -->
+    <section id="favorites-page" class="page">
+      <div class="welcome-section">
+        <h2>Your Favorites</h2>
+        <p>Your saved media collection.</p>
+      </div>
+      <div id="favorites-gallery" class="media-grid"></div>
+    </section>
+
     <section id="developer-page" class="page">
       <div class="developer-container">
+        <p class="eyebrow">ABOUT THIS WEBSITE</p>
         <h2>Developer Information</h2>
-
-        <div class="developer-card">
-          <h3 id="developer-name">Developer Name</h3>
-          <p id="developer-role">Website Developer</p>
-          <p id="developer-about">
-            Developer information will be displayed here.
-          </p>
-        </div>
-
-        <button id="edit-developer" class="primary-button" hidden>
-          Edit Developer Information
-        </button>
+        <h3 id="developer-name">Website Developer</h3>
+        <p id="developer-role"></p>
+        <p id="developer-about">Information about the developer will appear here.</p>
+        <button id="edit-developer" class="primary-button" hidden>Edit Information</button>
 
         <form id="developer-form" hidden>
-          <label for="dev-name-input">Developer Name</label>
+          <label for="dev-name-input">Name</label>
           <input id="dev-name-input" type="text" required>
 
-          <label for="dev-role-input">Developer Role</label>
-          <input id="dev-role-input" type="text" required>
+          <label for="dev-role-input">Role</label>
+          <input id="dev-role-input" type="text">
 
-          <label for="dev-about-input">About Developer</label>
-          <textarea id="dev-about-input" rows="5" required></textarea>
+          <label for="dev-about-input">About</label>
+          <textarea id="dev-about-input" rows="5"></textarea>
 
-          <button type="submit" class="primary-button">Save Information</button>
-          <p id="developer-status"></p>
+          <button type="submit" class="primary-button">Save Changes</button>
+          <p id="developer-status" role="status"></p>
         </form>
       </div>
     </section>
 
-    <footer class="footer">
+    <footer class="site-footer">
       © <span id="year"></span> My Media Gallery
     </footer>
-
   </main>
 
-  <!-- ADMIN LOGIN / UPLOAD DIALOG -->
-  <dialog id="admin-dialog">
-    <div class="dialog-content">
+  <dialog id="admin-dialog" class="admin-dialog">
+    <div class="dialog-header">
+      <h2>Administrator</h2>
+      <button id="dialog-close" class="icon-button" aria-label="Close">×</button>
+    </div>
 
-      <button id="dialog-close" class="icon-button dialog-close"
-        aria-label="Close dialog">×</button>
+    <div id="login-panel">
+      <form id="login-form">
+        <label for="admin-email">Email</label>
+        <input id="admin-email" type="email" required autocomplete="username">
 
-      <div id="login-panel">
-        <h2>Administrator Login</h2>
+        <label for="admin-password">Password</label>
+        <input id="admin-password" type="password" required autocomplete="current-password">
 
-        <form id="login-form">
-          <label for="admin-email">Email</label>
-          <input id="admin-email" type="email" required>
+        <button type="submit" class="primary-button">Sign In</button>
+        <p id="login-error" role="alert"></p>
+      </form>
+    </div>
 
-          <label for="admin-password">Password</label>
-          <input id="admin-password" type="password" required>
+    <div id="upload-panel" hidden>
+      <h3>Upload Media</h3>
+      <form id="upload-form">
+        <label for="media-title">Title</label>
+        <input id="media-title" type="text" required>
 
-          <button type="submit" class="primary-button">Login</button>
-          <p id="login-error"></p>
-        </form>
-      </div>
+        <label for="media-description">Description</label>
+        <textarea id="media-description" rows="3"></textarea>
 
-      <div id="upload-panel" hidden>
-        <h2>Upload Media</h2>
+        <label for="media-category">Category</label>
+        <select id="media-category" required>
+          <option value="Photos">Photos</option>
+          <option value="Videos">Videos</option>
+          <option value="Audio">Audio</option>
+        </select>
 
-        <form id="upload-form">
+        <label for="media-file">Choose File</label>
+        <input id="media-file" type="file" required accept="image/*,video/*,audio/*">
 
-          <label for="media-title">Title</label>
-          <input id="media-title" type="text" required>
-
-          <label for="media-description">Description</label>
-          <textarea id="media-description" rows="3"></textarea>
-
-          <label for="media-category">Category</label>
-          <select id="media-category">
-            <option value="Photos">Photos</option>
-            <option value="Videos">Videos</option>
-            <option value="Audio">Audio</option>
-          </select>
-
-          <label for="media-file">Choose File</label>
-          <input id="media-file" type="file" required>
-
-          <div class="progress-container">
-            <div id="progress-bar"></div>
-          </div>
-
-          <button id="upload-button" type="submit"
-            class="primary-button">Upload</button>
-
-          <p id="upload-status"></p>
-        </form>
-
-        <button id="logout" class="secondary-button">Logout</button>
-      </div>
-
+        <button id="upload-button" type="submit" class="primary-button">Upload</button>
+        <progress id="progress-bar" value="0" max="100"></progress>
+        <p id="upload-status" role="status"></p>
+      </form>
+      <button id="logout" class="secondary-button">Sign Out</button>
     </div>
   </dialog>
 
-  <p id="status" class="status-message"></p>
+  <div id="status" class="status-message" role="status"></div>
 
-  <!-- SUPABASE AND FIREBASE APPLICATION -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
   <script type="module" src="app.js"></script>
-
 </body>
 </html>
