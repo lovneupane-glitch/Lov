@@ -11,100 +11,89 @@ import {
   collection,
   getDocs,
   addDoc,
-  serverTimestamp
+  serverTimestamp,
+  doc,
+  getDoc,
+  setDoc
 } from "https://www.gstatic.com/firebasejs/13.3.0/firebase-firestore.js";
 
-// --------------------------------------------------
-// CONFIGURATION
-// --------------------------------------------------
+/* --------------------------------------------------
+   CONFIGURATION
+-------------------------------------------------- */
 
 const cfg = window.APP_CONFIG || {};
-
-const configured =
-  cfg.SUPABASE_URL &&
-  cfg.SUPABASE_ANON_KEY &&
-  !cfg.SUPABASE_URL.includes("YOUR-PROJECT") &&
-  !cfg.SUPABASE_ANON_KEY.includes("YOUR_");
+const BUCKET = "media";
+const FAVORITES_KEY = "myMediaGalleryFavorites";
 
 const $ = id => document.getElementById(id);
 
-const BUCKET = "media";
-
 let allFiles = [];
-let activeCategory = "All";
+let currentUserIsAdmin = false;
+let activePage = "home";
+let storageClient = null;
 
-// --------------------------------------------------
-// INITIAL PAGE SETUP
-// --------------------------------------------------
+const requiredIds = [
+  "year", "creator-name", "mobile-menu", "sidebar",
+  "sidebar-overlay", "close-menu", "page-title",
+  "file-count", "home-page", "media-page",
+  "favorites-page", "developer-page", "gallery",
+  "category-gallery", "favorites-gallery",
+  "search", "category-search", "media-heading",
+  "admin-open", "admin-dialog", "login-panel",
+  "upload-panel", "login-form", "upload-form",
+  "logout", "media-file", "media-title",
+  "media-description", "media-category",
+  "upload-button", "progress-bar", "upload-status",
+  "login-error", "status", "developer-name",
+  "developer-role", "developer-about",
+  "edit-developer", "developer-form",
+  "dev-name-input", "dev-role-input",
+  "dev-about-input", "developer-status",
+  "cancel-developer", "media-viewer",
+  "viewer-title", "viewer-content",
+  "viewer-description", "viewer-download",
+  "viewer-close", "dialog-close"
+];
 
-$("year").textContent = new Date().getFullYear();
-$("creator-name").textContent =
-  cfg.CREATOR_NAME || "The site owner";
+const missing = requiredIds.filter(id => !$(id));
 
-$("mobile-menu")?.addEventListener("click", () => {
-  $("main-nav")?.classList.toggle("open");
-});
-
-document.querySelector(".mobile-menu")?.addEventListener("click", () => {
-  document.querySelector(".nav")?.classList.toggle("open");
-});
-
-document.querySelectorAll(".nav a").forEach(link => {
-  link.addEventListener("click", () => {
-    document.querySelector(".nav")?.classList.remove("open");
-  });
-});
-
-// --------------------------------------------------
-// CHECK SUPABASE CONFIGURATION
-// --------------------------------------------------
-
-if (!configured || !window.supabase) {
-  $("gallery").innerHTML =
-    '<div class="empty-state">Supabase configuration is missing. Please check config.js.</div>';
-
-  $("admin-open").addEventListener("click", () => {
-    alert("Please configure Supabase in config.js first.");
-  });
-
-  $("file-count").textContent = "0";
-
-  throw new Error("Supabase configuration is missing.");
+if (missing.length) {
+  console.error("Missing HTML elements:", missing);
+  throw new Error("Some required HTML elements are missing. Check index.html.");
 }
 
-// --------------------------------------------------
-// SUPABASE STORAGE CLIENT
-// Firebase provides the authentication token.
-// --------------------------------------------------
+/* --------------------------------------------------
+   INITIAL SETUP
+-------------------------------------------------- */
 
-const storageClient = window.supabase.createClient(
-  cfg.SUPABASE_URL,
-  cfg.SUPABASE_ANON_KEY,
-  {
-    accessToken: async () => {
-      const user = auth.currentUser;
+$("year").textContent = new Date().getFullYear();
+$("creator-name").textContent = cfg.CREATOR_NAME || "The site owner";
 
-      if (!user) {
-        throw new Error("Please sign in as the administrator.");
-      }
+const adminDialog = $("admin-dialog");
+const mediaViewer = $("media-viewer");
 
-      return await user.getIdToken();
-    }
-  }
-);
+function showStatus(message) {
+  $("status").textContent = message;
+}
 
-// --------------------------------------------------
-// HELPER FUNCTIONS
-// --------------------------------------------------
-
-const escapeHtml = value =>
-  String(value ?? "").replace(/[&<>"']/g, char => ({
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, char => ({
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",
     '"': "&quot;",
     "'": "&#39;"
   }[char]));
+}
+
+function safeUrl(value) {
+  try {
+    const url = new URL(value);
+    return ["https:", "http:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+}
 
 function mediaKind(category) {
   const value = String(category || "").toLowerCase();
@@ -115,7 +104,7 @@ function mediaKind(category) {
   return "image";
 }
 
-function niceDate(value) {
+function formatDate(value) {
   if (!value) return "Recently added";
 
   const date = value.toDate
@@ -131,20 +120,252 @@ function niceDate(value) {
   });
 }
 
-// --------------------------------------------------
-// LOAD MEDIA FROM FIRESTORE
-// --------------------------------------------------
+/* --------------------------------------------------
+   FAVORITES
+-------------------------------------------------- */
+
+function getFavorites() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(FAVORITES_KEY) || "[]");
+    return Array.isArray(saved) ? saved : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveFavorites(favorites) {
+  localStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites));
+  updateFavoriteCount();
+}
+
+function isFavorite(id) {
+  return getFavorites().includes(id);
+}
+
+function toggleFavorite(id) {
+  const favorites = getFavorites();
+
+  const updated = favorites.includes(id)
+    ? favorites.filter(item => item !== id)
+    : [...favorites, id];
+
+  saveFavorites(updated);
+  renderAll();
+
+  showStatus(
+    updated.includes(id)
+      ? "Added to Favorites."
+      : "Removed from Favorites."
+  );
+}
+
+function updateFavoriteCount() {
+  $("favorite-count").textContent = getFavorites().length;
+}
+
+/* --------------------------------------------------
+   NAVIGATION
+-------------------------------------------------- */
+
+const pageIds = {
+  home: "home-page",
+  Photos: "media-page",
+  Videos: "media-page",
+  Audio: "media-page",
+  favorites: "favorites-page",
+  developer: "developer-page"
+};
+
+function openPage(page) {
+  if (!pageIds[page]) return;
+
+  activePage = page;
+
+  document.querySelectorAll(".page").forEach(section => {
+    section.classList.remove("active");
+  });
+
+  $(pageIds[page]).classList.add("active");
+
+  document.querySelectorAll("[data-page]").forEach(button => {
+    button.classList.toggle(
+      "active",
+      button.dataset.page === page
+    );
+  });
+
+  const titles = {
+    home: "Home",
+    Photos: "Photos",
+    Videos: "Videos",
+    Audio: "Audio",
+    favorites: "Favorites",
+    developer: "Developer Information"
+  };
+
+  $("page-title").textContent = titles[page];
+
+  if (["Photos", "Videos", "Audio"].includes(page)) {
+    $("media-heading").textContent = page;
+    $("category-search").value = "";
+    renderCategory();
+  }
+
+  if (page === "favorites") {
+    renderFavorites();
+  }
+
+  closeSidebar();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+document.addEventListener("click", event => {
+  const button = event.target.closest("[data-page]");
+  if (!button) return;
+
+  event.preventDefault();
+  openPage(button.dataset.page);
+});
+
+function openSidebar() {
+  $("sidebar").classList.add("open");
+  $("sidebar-overlay").classList.add("active");
+}
+
+function closeSidebar() {
+  $("sidebar").classList.remove("open");
+  $("sidebar-overlay").classList.remove("active");
+}
+
+$("mobile-menu").addEventListener("click", openSidebar);
+$("close-menu").addEventListener("click", closeSidebar);
+$("sidebar-overlay").addEventListener("click", closeSidebar);
+
+/* --------------------------------------------------
+   SUPABASE STORAGE
+-------------------------------------------------- */
+
+const configured =
+  cfg.SUPABASE_URL &&
+  cfg.SUPABASE_ANON_KEY &&
+  !cfg.SUPABASE_URL.includes("YOUR-PROJECT") &&
+  !cfg.SUPABASE_ANON_KEY.includes("YOUR_");
+
+if (configured && window.supabase) {
+  storageClient = window.supabase.createClient(
+    cfg.SUPABASE_URL,
+    cfg.SUPABASE_ANON_KEY,
+    {
+      accessToken: async () => {
+        if (!auth.currentUser) {
+          throw new Error("Administrator login required.");
+        }
+
+        return await auth.currentUser.getIdToken();
+      }
+    }
+  );
+} else {
+  console.error("Supabase configuration is missing.");
+}
+
+/* --------------------------------------------------
+   MEDIA CARD
+-------------------------------------------------- */
+
+function createMediaCard(file) {
+  const kind = mediaKind(file.category);
+  const url = safeUrl(file.public_url);
+
+  if (!url) return "";
+
+  const card = document.createElement("article");
+  card.className = "media-card";
+
+  let preview = "";
+
+  if (kind === "image") {
+    preview = `
+      <img src="${escapeHtml(url)}"
+        alt="${escapeHtml(file.title)}"
+        loading="lazy">
+    `;
+  } else if (kind === "video") {
+    preview = `
+      <video src="${escapeHtml(url)}"
+        controls preload="metadata"></video>
+    `;
+  } else {
+    preview = `
+      <div class="audio-art">♫</div>
+      <audio src="${escapeHtml(url)}"
+        controls preload="metadata"></audio>
+    `;
+  }
+
+  card.innerHTML = `
+    <div class="preview">${preview}</div>
+
+    <div class="media-card-content">
+      <p class="media-date">${escapeHtml(formatDate(file.created_at))}</p>
+
+      <h3>${escapeHtml(file.title || "Untitled")}</h3>
+
+      <p>${escapeHtml(file.description || "No description provided.")}</p>
+
+      <button type="button" data-action="preview"
+        data-id="${escapeHtml(file.id)}">
+        View
+      </button>
+
+      <button type="button" data-action="favorite"
+        data-id="${escapeHtml(file.id)}">
+        ${isFavorite(file.id) ? "♥ Saved" : "♡ Favorite"}
+      </button>
+
+      <a class="download"
+        href="${escapeHtml(url)}"
+        download="${escapeHtml(file.original_name || file.title || "media")}"
+        target="_blank" rel="noopener">
+        ↓ Download
+      </a>
+    </div>
+  `;
+
+  return card;
+}
+
+function displayFiles(container, files) {
+  container.innerHTML = "";
+
+  if (!files.length) {
+    container.innerHTML = `
+      <p class="empty-state">No media found.</p>
+    `;
+    return;
+  }
+
+  files.forEach(file => {
+    const card = createMediaCard(file);
+    if (card) container.appendChild(card);
+  });
+}
+
+/* --------------------------------------------------
+   LOAD MEDIA FROM FIRESTORE
+-------------------------------------------------- */
 
 async function loadFiles() {
-  $("gallery").innerHTML =
-    '<div class="empty-state">Loading the collection...</div>';
+  $("gallery").innerHTML = `
+    <p class="empty-state">Loading media...</p>
+  `;
 
   try {
     const snapshot = await getDocs(collection(db, "media_files"));
 
-    allFiles = snapshot.docs.map(document => ({
-      id: document.id,
-      ...document.data()
+    allFiles = snapshot.docs.map(item => ({
+      id: item.id,
+      ...item.data()
     }));
 
     allFiles.sort((a, b) => {
@@ -159,42 +380,53 @@ async function loadFiles() {
       return dateB - dateA;
     });
 
-    $("file-count").textContent = allFiles.length;
+    $("file-count").textContent = `${allFiles.length} items`;
 
-    render();
+    renderAll();
 
   } catch (error) {
-    console.error("Firestore loading error:", error);
+    console.error("Firestore error:", error);
 
-    $("gallery").innerHTML =
-      '<div class="empty-state">We could not load the gallery. Please check your Firestore configuration and security rules.</div>';
+    $("gallery").innerHTML = `
+      <p class="empty-state">
+        Could not load media. Check Firestore permissions.
+      </p>
+    `;
 
-    $("status").textContent = error.message;
+    showStatus(error.message);
   }
 }
 
-// --------------------------------------------------
-// DISPLAY MEDIA
-// --------------------------------------------------
+/* --------------------------------------------------
+   RENDER GALLERIES
+-------------------------------------------------- */
 
-function render() {
-  const searchInput = $("search");
+function renderHome() {
+  const query = $("search").value.trim().toLowerCase();
 
-  const query = searchInput
-    ? searchInput.value.trim().toLowerCase()
-    : "";
-
-  const visible = allFiles.filter(file => {
-    const category = mediaKind(file.category);
-
-    const categoryMatches =
-      activeCategory === "All" ||
-      mediaKind(activeCategory) === category;
-
-    const searchMatches = [
+  const files = allFiles.filter(file => {
+    return [
       file.title,
       file.description,
       file.category
+    ].some(value =>
+      String(value || "").toLowerCase().includes(query)
+    );
+  });
+
+  displayFiles($("gallery"), files);
+}
+
+function renderCategory() {
+  const category = mediaKind(activePage);
+  const query = $("category-search").value.trim().toLowerCase();
+
+  const files = allFiles.filter(file => {
+    const categoryMatches = mediaKind(file.category) === category;
+
+    const searchMatches = [
+      file.title,
+      file.description
     ].some(value =>
       String(value || "").toLowerCase().includes(query)
     );
@@ -202,93 +434,92 @@ function render() {
     return categoryMatches && searchMatches;
   });
 
-  if (!visible.length) {
-    $("gallery").innerHTML =
-      '<div class="empty-state">No media found. New uploads will appear here.</div>';
-
-    return;
-  }
-
-  $("gallery").innerHTML = visible.map(file => {
-    const kind = mediaKind(file.category);
-
-    const preview = kind === "image"
-      ? `<img src="${escapeHtml(file.public_url)}"
-          alt="${escapeHtml(file.title)}"
-          loading="lazy">`
-
-      : kind === "video"
-        ? `<video src="${escapeHtml(file.public_url)}"
-            controls preload="metadata"></video>`
-
-        : `<div class="audio-art">♫</div>
-           <audio src="${escapeHtml(file.public_url)}"
-            controls preload="metadata"></audio>`;
-
-    return `
-      <article class="media-card">
-
-        <div class="preview">
-          ${preview}
-        </div>
-
-        <div class="card-body">
-
-          <div class="card-meta">
-            <span class="category-tag">
-              ${escapeHtml(file.category)}
-            </span>
-
-            <span>
-              ${niceDate(file.created_at)}
-            </span>
-          </div>
-
-          <h3>${escapeHtml(file.title)}</h3>
-
-          <div class="description">
-            ${escapeHtml(file.description || "No description provided.")}
-          </div>
-
-          <a class="download"
-             href="${escapeHtml(file.public_url)}"
-             download="${escapeHtml(file.original_name || file.title)}"
-             target="_blank"
-             rel="noopener">
-             ↓ &nbsp; Download file
-          </a>
-
-        </div>
-      </article>
-    `;
-  }).join("");
+  displayFiles($("category-gallery"), files);
 }
 
-// --------------------------------------------------
-// SEARCH AND CATEGORY FILTERS
-// --------------------------------------------------
+function renderFavorites() {
+  const favorites = getFavorites();
 
-$("search").addEventListener("input", render);
+  const files = allFiles.filter(file =>
+    favorites.includes(file.id)
+  );
 
-$("category-filters").addEventListener("click", event => {
-  const button = event.target.closest("[data-category]");
+  displayFiles($("favorites-gallery"), files);
+}
 
+function renderAll() {
+  renderHome();
+  renderFavorites();
+
+  if (["Photos", "Videos", "Audio"].includes(activePage)) {
+    renderCategory();
+  }
+
+  updateFavoriteCount();
+}
+
+$("search").addEventListener("input", renderHome);
+$("category-search").addEventListener("input", renderCategory);
+
+/* --------------------------------------------------
+   MEDIA ACTIONS AND VIEWER
+-------------------------------------------------- */
+
+document.addEventListener("click", event => {
+  const button = event.target.closest("[data-action]");
   if (!button) return;
 
-  activeCategory = button.dataset.category;
+  const id = button.dataset.id;
+  const file = allFiles.find(item => item.id === id);
 
-  document.querySelectorAll(".filter").forEach(item => {
-    item.classList.toggle("active", item === button);
-  });
+  if (!file) return;
 
-  render();
+  if (button.dataset.action === "favorite") {
+    toggleFavorite(id);
+  }
+
+  if (button.dataset.action === "preview") {
+    openViewer(file);
+  }
 });
 
-// --------------------------------------------------
-// ADMIN LOGIN DIALOG
-// --------------------------------------------------
+function openViewer(file) {
+  const url = safeUrl(file.public_url);
+  if (!url) return;
 
-const dialog = $("admin-dialog");
+  const kind = mediaKind(file.category);
+
+  $("viewer-title").textContent = file.title || "Media Preview";
+  $("viewer-description").textContent = file.description || "";
+
+  let content = "";
+
+  if (kind === "image") {
+    content = `<img src="${escapeHtml(url)}" alt="${escapeHtml(file.title)}">`;
+  } else if (kind === "video") {
+    content = `<video src="${escapeHtml(url)}" controls autoplay></video>`;
+  } else {
+    content = `<audio src="${escapeHtml(url)}" controls autoplay></audio>`;
+  }
+
+  $("viewer-content").innerHTML = content;
+  $("viewer-download").href = url;
+  $("viewer-download").download =
+    file.original_name || file.title || "media";
+
+  mediaViewer.showModal();
+}
+
+function closeViewer() {
+  $("viewer-content").innerHTML = "";
+  mediaViewer.close();
+}
+
+$("viewer-close").addEventListener("click", closeViewer);
+
+/* --------------------------------------------------
+   ADMIN LOGIN
+-------------------------------------------------- */
 
 function showAdmin(isLoggedIn) {
   $("login-panel").hidden = isLoggedIn;
@@ -297,37 +528,18 @@ function showAdmin(isLoggedIn) {
 }
 
 $("admin-open").addEventListener("click", () => {
-  showAdmin(!!auth.currentUser);
-  dialog.showModal();
+  showAdmin(currentUserIsAdmin);
+  adminDialog.showModal();
 });
 
-// --------------------------------------------------
-// FIREBASE AUTHENTICATION
-// --------------------------------------------------
-
-onAuthStateChanged(auth, async user => {
-  if (user) {
-    try {
-      // Refresh Firebase token to include updated custom claims.
-      await user.getIdToken(true);
-    } catch (error) {
-      console.error("Token refresh error:", error);
-    }
-  }
-
-  if (dialog.open) {
-    showAdmin(!!user);
-  }
+$("dialog-close").addEventListener("click", () => {
+  adminDialog.close();
 });
-
-// --------------------------------------------------
-// ADMIN LOGIN
-// --------------------------------------------------
 
 $("login-form").addEventListener("submit", async event => {
   event.preventDefault();
 
-  $("login-error").textContent = "Checking your login...";
+  $("login-error").textContent = "Checking login...";
 
   try {
     await signInWithEmailAndPassword(
@@ -338,60 +550,90 @@ $("login-form").addEventListener("submit", async event => {
 
     await auth.currentUser.getIdToken(true);
 
-    showAdmin(true);
+    $("login-error").textContent = "Login successful.";
 
   } catch (error) {
     console.error("Login error:", error);
-
-    $("login-error").textContent =
-      "Login failed: " + error.message;
+    $("login-error").textContent = "Login failed: " + error.message;
   }
 });
-
-// --------------------------------------------------
-// ADMIN LOGOUT
-// --------------------------------------------------
 
 $("logout").addEventListener("click", async () => {
   try {
     await signOut(auth);
     showAdmin(false);
+    adminDialog.close();
+    showStatus("You have signed out.");
   } catch (error) {
-    console.error("Logout error:", error);
+    showStatus(error.message);
   }
 });
 
-// --------------------------------------------------
-// MEDIA UPLOAD
-// SUPABASE STORAGE + FIRESTORE
-// --------------------------------------------------
+/* --------------------------------------------------
+   AUTHENTICATION STATE
+-------------------------------------------------- */
+
+onAuthStateChanged(auth, async user => {
+  currentUserIsAdmin = false;
+
+  if (user) {
+    try {
+      const token = await user.getIdTokenResult(true);
+
+      // The admin custom claim was configured on your Firebase user.
+      currentUserIsAdmin =
+        token.claims.role === "authenticated";
+
+    } catch (error) {
+      console.error("Could not verify administrator claim:", error);
+    }
+  }
+
+  $("edit-developer").hidden = !currentUserIsAdmin;
+
+  if (adminDialog.open) {
+    showAdmin(currentUserIsAdmin);
+  }
+
+  if (currentUserIsAdmin) {
+    loadDeveloperInfo();
+  }
+});
+
+/* --------------------------------------------------
+   SUPABASE UPLOAD + FIRESTORE RECORD
+-------------------------------------------------- */
 
 $("upload-form").addEventListener("submit", async event => {
   event.preventDefault();
 
   const file = $("media-file").files[0];
-
-  if (!file) return;
-
   const user = auth.currentUser;
 
-  if (!user) {
-    showAdmin(false);
+  if (!user || !currentUserIsAdmin) {
+    $("upload-status").textContent =
+      "Administrator access is required.";
     return;
   }
 
-  const category = $("media-category").value;
-
-  const expected = category === "Videos"
-    ? "video/"
-    : category === "Audio"
-      ? "audio/"
-      : "image/";
-
-  if (!file.type.startsWith(expected)) {
+  if (!storageClient) {
     $("upload-status").textContent =
-      `Please choose a ${category.toLowerCase()} file for this category.`;
+      "Supabase configuration is missing. Check config.js.";
+    return;
+  }
 
+  if (!file) return;
+
+  const category = $("media-category").value;
+  const expectedType = {
+    Photos: "image/",
+    Videos: "video/",
+    Audio: "audio/"
+  }[category];
+
+  if (!expectedType || !file.type.startsWith(expectedType)) {
+    $("upload-status").textContent =
+      "Please select a file matching the selected category.";
     return;
   }
 
@@ -403,56 +645,46 @@ $("upload-form").addEventListener("submit", async event => {
   const path = `${crypto.randomUUID()}-${safeName}`;
 
   const button = $("upload-button");
-  const bar = $("progress-bar");
+  const progress = $("progress-bar");
 
   button.disabled = true;
-  bar.style.width = "0%";
-
-  $("upload-status").textContent = "Uploading your file...";
+  progress.value = 10;
+  $("upload-status").textContent = "Uploading file...";
 
   try {
-    // Refresh the Firebase authentication token.
     await user.getIdToken(true);
 
-    // Upload file to Supabase Storage.
     const { error: uploadError } = await storageClient
       .storage
       .from(BUCKET)
       .upload(path, file, {
-        contentType: file.type || "application/octet-stream",
+        contentType: file.type,
         upsert: false
       });
 
     if (uploadError) throw uploadError;
 
-    bar.style.width = "70%";
-
+    progress.value = 70;
     $("upload-status").textContent =
-      "File uploaded. Saving media information...";
+      "Saving media information...";
 
-    // Get public URL from Supabase Storage.
-    const { data: publicData } = storageClient
+    const { data } = storageClient
       .storage
       .from(BUCKET)
       .getPublicUrl(path);
 
-    const publicUrl = publicData.publicUrl;
-
-    // Save media details in Cloud Firestore.
     await addDoc(collection(db, "media_files"), {
       title: $("media-title").value.trim(),
       description: $("media-description").value.trim(),
       category: mediaKind(category),
       original_name: file.name,
       storage_path: path,
-      public_url: publicUrl,
+      public_url: data.publicUrl,
       created_at: serverTimestamp()
     });
 
-    bar.style.width = "100%";
-
-    $("upload-status").textContent =
-      "Success! Your file is now in the gallery.";
+    progress.value = 100;
+    $("upload-status").textContent = "Upload successful!";
 
     $("upload-form").reset();
 
@@ -462,15 +694,106 @@ $("upload-form").addEventListener("submit", async event => {
     console.error("Upload error:", error);
 
     $("upload-status").textContent =
-      "Upload error: " + error.message;
+      "Upload failed: " + error.message;
 
   } finally {
     button.disabled = false;
   }
 });
 
-// --------------------------------------------------
-// INITIALIZE GALLERY
-// --------------------------------------------------
+/* --------------------------------------------------
+   DEVELOPER INFORMATION
+-------------------------------------------------- */
 
+// Public information is stored in:
+// Firestore collection: site_info
+// Document ID: developer
+
+async function loadDeveloperInfo() {
+  try {
+    const reference = doc(db, "site_info", "developer");
+    const snapshot = await getDoc(reference);
+
+    if (!snapshot.exists()) return;
+
+    const data = snapshot.data();
+
+    $("developer-name").textContent = data.name || "Website Developer";
+    $("developer-role").textContent = data.role || "";
+    $("developer-about").textContent = data.about || "";
+
+    $("dev-name-input").value = data.name || "";
+    $("dev-role-input").value = data.role || "";
+    $("dev-about-input").value = data.about || "";
+
+  } catch (error) {
+    console.error("Developer information loading error:", error);
+    $("developer-status").textContent =
+      "Could not load developer information.";
+  }
+}
+
+$("edit-developer").addEventListener("click", () => {
+  if (!currentUserIsAdmin) return;
+
+  $("developer-form").hidden = false;
+  $("developer-status").textContent = "";
+});
+
+$("cancel-developer").addEventListener("click", () => {
+  $("developer-form").hidden = true;
+  loadDeveloperInfo();
+});
+
+$("developer-form").addEventListener("submit", async event => {
+  event.preventDefault();
+
+  if (!currentUserIsAdmin || !auth.currentUser) {
+    $("developer-status").textContent =
+      "Administrator access is required.";
+    return;
+  }
+
+  $("developer-status").textContent = "Saving information...";
+
+  try {
+    await setDoc(
+      doc(db, "site_info", "developer"),
+      {
+        name: $("dev-name-input").value.trim(),
+        role: $("dev-role-input").value.trim(),
+        about: $("dev-about-input").value.trim(),
+        updated_at: serverTimestamp()
+      },
+      { merge: true }
+    );
+
+    $("developer-name").textContent =
+      $("dev-name-input").value.trim();
+
+    $("developer-role").textContent =
+      $("dev-role-input").value.trim();
+
+    $("developer-about").textContent =
+      $("dev-about-input").value.trim();
+
+    $("developer-form").hidden = true;
+    $("developer-status").textContent =
+      "Developer information saved.";
+
+  } catch (error) {
+    console.error("Developer information save error:", error);
+
+    $("developer-status").textContent =
+      "Could not save: " + error.message;
+  }
+});
+
+/* --------------------------------------------------
+   START WEBSITE
+-------------------------------------------------- */
+
+updateFavoriteCount();
+openPage("home");
 loadFiles();
+loadDeveloperInfo();
