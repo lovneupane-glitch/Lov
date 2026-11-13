@@ -1,161 +1,545 @@
-(() => {
-  const cfg = window.APP_CONFIG || {};
-  const configured = cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY &&
-    !cfg.SUPABASE_URL.includes("YOUR-PROJECT") && !cfg.SUPABASE_ANON_KEY.includes("YOUR_");
-  const $ = id => document.getElementById(id);
-  $("year").textContent = new Date().getFullYear();
-  $("creator-name").textContent = cfg.CREATOR_NAME || "The site owner";
-  $("mobile-menu").addEventListener("click", () => $("main-nav")?.classList.toggle("open"));
-  // Navigation menu works on small screens.
-  document.querySelector(".mobile-menu").addEventListener("click", () => document.querySelector(".nav").classList.toggle("open"));
-  document.querySelectorAll(".nav a").forEach(a => a.addEventListener("click", () => document.querySelector(".nav").classList.remove("open")));
 
-  if (!configured || !window.supabase) {
-    $("gallery").innerHTML = '<div class="empty-state">Your website design is ready. Connect Supabase using the beginner guide in README.md to show real uploaded files.</div>';
-    $("admin-open").addEventListener("click", () => alert("First connect Supabase by following README.md."));
-    $("file-count").textContent = "0";
+import { auth, db } from "./firebase.js";
+
+import {
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/13.3.0/firebase-auth.js";
+
+import {
+  collection,
+  getDocs,
+  addDoc,
+  serverTimestamp
+} from "https://www.gstatic.com/firebasejs/13.3.0/firebase-firestore.js";
+
+// --------------------------------------------------
+// CONFIGURATION
+// --------------------------------------------------
+
+const cfg = window.APP_CONFIG || {};
+const BUCKET = "media";
+
+const $ = id => document.getElementById(id);
+
+const escapeHtml = value =>
+  String(value ?? "").replace(/[&<>"']/g, char => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  }[char]));
+
+const categoryName = category => {
+  const value = String(category || "").toLowerCase();
+
+  if (value === "video" || value === "videos") return "Videos";
+  if (value === "audio") return "Audio";
+
+  return "Photos";
+};
+
+const mediaKind = category => {
+  const name = categoryName(category);
+
+  if (name === "Videos") return "video";
+  if (name === "Audio") return "audio";
+
+  return "image";
+};
+
+const safeUrl = value => {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.href : "";
+  } catch {
+    return "";
+  }
+};
+
+const getDate = value => {
+  if (!value) return null;
+
+  if (typeof value.toDate === "function") {
+    return value.toDate();
+  }
+
+  const date = new Date(value);
+
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const niceDate = value => {
+  const date = getDate(value);
+
+  return date
+    ? date.toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric"
+      })
+    : "Recently added";
+};
+
+// --------------------------------------------------
+// PAGE SETUP
+// --------------------------------------------------
+
+if ($("year")) {
+  $("year").textContent = new Date().getFullYear();
+}
+
+if ($("creator-name")) {
+  $("creator-name").textContent =
+    cfg.CREATOR_NAME || "The site owner";
+}
+
+const menuButton = $("mobile-menu");
+const navigation = $("main-nav") || document.querySelector(".nav");
+
+menuButton?.addEventListener("click", () => {
+  navigation?.classList.toggle("open");
+});
+
+document.querySelectorAll(".nav a").forEach(link => {
+  link.addEventListener("click", () => {
+    navigation?.classList.remove("open");
+  });
+});
+
+// --------------------------------------------------
+// CHECK CONFIGURATION
+// --------------------------------------------------
+
+if (
+  !cfg.SUPABASE_URL ||
+  !cfg.SUPABASE_ANON_KEY ||
+  !window.supabase
+) {
+  if ($("gallery")) {
+    $("gallery").innerHTML =
+      '<div class="empty-state">Configuration missing. Please check config.js and the Supabase library.</div>';
+  }
+
+  if ($("status")) {
+    $("status").textContent = "Configuration error.";
+  }
+
+  throw new Error("Supabase configuration is missing.");
+}
+
+// --------------------------------------------------
+// SUPABASE CLIENT
+// Firebase ID token is used for Supabase authentication.
+// --------------------------------------------------
+
+const storageClient = window.supabase.createClient(
+  cfg.SUPABASE_URL,
+  cfg.SUPABASE_ANON_KEY,
+  {
+    accessToken: async () => {
+      const user = auth.currentUser;
+
+      if (!user) {
+        throw new Error("Please sign in as the administrator.");
+      }
+
+      return await user.getIdToken();
+    }
+  }
+);
+
+// --------------------------------------------------
+// GALLERY
+// --------------------------------------------------
+
+let allFiles = [];
+let activeCategory = "All";
+
+async function loadFiles() {
+  if ($("gallery")) {
+    $("gallery").innerHTML =
+      '<div class="empty-state">Loading your collection...</div>';
+  }
+
+  try {
+    const snapshot = await getDocs(
+      collection(db, "media_files")
+    );
+
+    allFiles = snapshot.docs.map(document => ({
+      id: document.id,
+      ...document.data()
+    }));
+
+    allFiles.sort((a, b) => {
+      const dateA = getDate(a.created_at)?.getTime() || 0;
+      const dateB = getDate(b.created_at)?.getTime() || 0;
+
+      return dateB - dateA;
+    });
+
+    if ($("file-count")) {
+      $("file-count").textContent = allFiles.length;
+    }
+
+    renderGallery();
+
+    if ($("status")) {
+      $("status").textContent = "";
+    }
+
+  } catch (error) {
+    console.error("Gallery loading error:", error);
+
+    if ($("gallery")) {
+      $("gallery").innerHTML =
+        '<div class="empty-state">Unable to load the gallery. Check your Firestore security rules.</div>';
+    }
+
+    if ($("status")) {
+      $("status").textContent = error.message;
+    }
+  }
+}
+
+// --------------------------------------------------
+// DISPLAY MEDIA
+// --------------------------------------------------
+
+function renderGallery() {
+  const search = $("search");
+
+  const query = search
+    ? search.value.trim().toLowerCase()
+    : "";
+
+  const visible = allFiles.filter(file => {
+    const category = categoryName(file.category);
+
+    const categoryMatches =
+      activeCategory === "All" ||
+      category === activeCategory;
+
+    const searchMatches = [
+      file.title,
+      file.description,
+      category
+    ].some(value =>
+      String(value || "").toLowerCase().includes(query)
+    );
+
+    return categoryMatches && searchMatches;
+  });
+
+  if (!visible.length) {
+    $("gallery").innerHTML =
+      '<div class="empty-state">No media found. Try another search or category.</div>';
+
     return;
   }
 
-  const client = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
-  const BUCKET = "media";
-  let allFiles = [];
-  let activeCategory = "All";
+  $("gallery").innerHTML = visible.map(file => {
+    const kind = mediaKind(file.category);
+    const url = safeUrl(file.public_url);
 
-  const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  const niceDate = value => new Date(value).toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"});
-  const mediaKind = category => category === "Videos" ? "video" : category === "Audio" ? "audio" : "image";
+    let preview = "";
 
-  async function loadFiles() {
-    $("gallery").innerHTML = '<div class="empty-state">Loading the collection…</div>';
-    const {data,error} = await client.from("media_files").select("*").order("created_at",{ascending:false});
-    if (error) {
-      $("gallery").innerHTML = '<div class="empty-state">We could not load the gallery. Please check the setup guide.</div>';
-      $("status").textContent = error.message;
-      return;
+    if (!url) {
+      preview = '<div class="audio-art">Preview unavailable</div>';
+    } else if (kind === "image") {
+      preview = `
+        <img
+          src="${escapeHtml(url)}"
+          alt="${escapeHtml(file.title)}"
+          loading="lazy"
+        >
+      `;
+    } else if (kind === "video") {
+      preview = `
+        <video
+          src="${escapeHtml(url)}"
+          controls
+          preload="metadata"
+        ></video>
+      `;
+    } else {
+      preview = `
+        <div class="audio-art">♫</div>
+        <audio
+          src="${escapeHtml(url)}"
+          controls
+          preload="metadata"
+        ></audio>
+      `;
     }
-    allFiles = data || [];
-    $("file-count").textContent = allFiles.length;
-    render();
-  }
 
-  function render() {
-    const q = $("search").value.trim().toLowerCase();
-    const visible = allFiles.filter(f =>
-      (activeCategory === "All" || f.category === activeCategory) &&
-      [f.title,f.description,f.category].some(v => String(v || "").toLowerCase().includes(q))
-    );
-    if (!visible.length) {
-      $("gallery").innerHTML = '<div class="empty-state">No media found. Try another search or category. New uploads will appear here.</div>';
-      return;
-    }
-    $("gallery").innerHTML = visible.map(f => {
-      const kind = mediaKind(f.category);
-      const preview = kind === "image"
-        ? `<img src="${escapeHtml(f.public_url)}" alt="${escapeHtml(f.title)}" loading="lazy">`
-        : kind === "video"
-          ? `<video src="${escapeHtml(f.public_url)}" controls preload="metadata"></video>`
-          : `<div class="audio-art">♫</div><audio src="${escapeHtml(f.public_url)}" controls preload="metadata"></audio>`;
-      return `<article class="media-card"><div class="preview">${preview}</div><div class="card-body">
-        <div class="card-meta"><span class="category-tag">${escapeHtml(f.category)}</span><span>${niceDate(f.created_at)}</span></div>
-        <h3>${escapeHtml(f.title)}</h3><div class="description">${escapeHtml(f.description || "No description provided.")}</div>
-        <a class="download" href="${escapeHtml(f.public_url)}" download="${escapeHtml(f.original_name || f.title)}" target="_blank" rel="noopener">↓ &nbsp; Download file</a>
-      </div></article>`;
-    }).join("");
-  }
+    const downloadLink = url
+      ? `<a class="download"
+           href="${escapeHtml(url)}"
+           download="${escapeHtml(file.original_name || file.title)}"
+           target="_blank"
+           rel="noopener">
+           ↓ &nbsp; Download file
+         </a>`
+      : "";
 
-  $("search").addEventListener("input",render);
-  $("category-filters").addEventListener("click",e => {
-    const button = e.target.closest("[data-category]");
-    if (!button) return;
-    activeCategory = button.dataset.category;
-    document.querySelectorAll(".filter").forEach(b => b.classList.toggle("active",b === button));
-    render();
+    return `
+      <article class="media-card">
+        <div class="preview">
+          ${preview}
+        </div>
+
+        <div class="card-body">
+          <div class="card-meta">
+            <span class="category-tag">
+              ${escapeHtml(categoryName(file.category))}
+            </span>
+
+            <span>${escapeHtml(niceDate(file.created_at))}</span>
+          </div>
+
+          <h3>${escapeHtml(file.title || "Untitled")}</h3>
+
+          <div class="description">
+            ${escapeHtml(file.description || "No description provided.")}
+          </div>
+
+          ${downloadLink}
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+// --------------------------------------------------
+// SEARCH AND CATEGORY FILTERS
+// --------------------------------------------------
+
+$("search")?.addEventListener("input", renderGallery);
+
+$("category-filters")?.addEventListener("click", event => {
+  const button = event.target.closest("[data-category]");
+
+  if (!button) return;
+
+  activeCategory = button.dataset.category;
+
+  document.querySelectorAll(".filter").forEach(filter => {
+    filter.classList.toggle("active", filter === button);
   });
 
-  const dialog = $("admin-dialog");
-  $("admin-open").addEventListener("click",async () => {
-    const {data} = await client.auth.getSession();
-    showAdmin(!!data.session);
-    dialog.showModal();
-  });
-  function showAdmin(isLoggedIn) {
+  renderGallery();
+});
+
+// --------------------------------------------------
+// ADMIN LOGIN
+// --------------------------------------------------
+
+const dialog = $("admin-dialog");
+
+function showAdmin(isLoggedIn) {
+  if ($("login-panel")) {
     $("login-panel").hidden = isLoggedIn;
+  }
+
+  if ($("upload-panel")) {
     $("upload-panel").hidden = !isLoggedIn;
+  }
+
+  if ($("login-error")) {
     $("login-error").textContent = "";
   }
-  client.auth.onAuthStateChange((_event,session) => {
-    if (dialog.open) showAdmin(!!session);
-  });
+}
 
-  $("login-form").addEventListener("submit",async e => {
-    e.preventDefault();
-    $("login-error").textContent = "Checking your login…";
-    const {error} = await client.auth.signInWithPassword({
-      email:$("admin-email").value.trim(),password:$("admin-password").value
-    });
-    $("login-error").textContent = error ? error.message : "";
-    if (!error) showAdmin(true);
-  });
+$("admin-open")?.addEventListener("click", () => {
+  showAdmin(!!auth.currentUser);
 
-  $("logout").addEventListener("click",async () => {
-    await client.auth.signOut();
-    showAdmin(false);
-  });
+  if (dialog && !dialog.open) {
+    dialog.showModal();
+  }
+});
 
-  $("upload-form").addEventListener("submit",async e => {
-    e.preventDefault();
-    const file = $("media-file").files[0];
-    if (!file) return;
-    const category = $("media-category").value;
-    const expected = category === "Videos" ? "video/" : category === "Audio" ? "audio/" : "image/";
-    if (!file.type.startsWith(expected)) {
-      $("upload-status").textContent = `Please choose a ${category.toLowerCase()} file for this category.`;
-      return;
-    }
-    const {data:sessionData} = await client.auth.getSession();
-    const session = sessionData.session;
-    if (!session) { showAdmin(false); return; }
+// Monitor Firebase authentication.
 
-    const safeName = file.name.normalize("NFKD").replace(/[^a-zA-Z0-9._-]+/g,"-").slice(-100);
-    const path = `${crypto.randomUUID()}-${safeName}`;
-    const endpoint = `${cfg.SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`;
-    const button = $("upload-button");
-    const bar = $("progress-bar");
-    button.disabled = true; bar.style.width = "0%";
-    $("upload-status").textContent = "Starting upload…";
+onAuthStateChanged(auth, async user => {
+  showAdmin(!!user);
 
+  if (user) {
     try {
-      await new Promise((resolve,reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST",endpoint);
-        xhr.setRequestHeader("apikey",cfg.SUPABASE_ANON_KEY);
-        xhr.setRequestHeader("Authorization",`Bearer ${session.access_token}`);
-        xhr.setRequestHeader("Content-Type",file.type || "application/octet-stream");
-        xhr.upload.onprogress = ev => {
-          if (ev.lengthComputable) {
-            const percent = Math.round(ev.loaded / ev.total * 100);
-            bar.style.width = percent + "%";
-            $("upload-status").textContent = `Uploading… ${percent}%`;
-          }
-        };
-        xhr.onload = () => xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(xhr.responseText || `Upload failed (${xhr.status})`));
-        xhr.onerror = () => reject(new Error("Network error. Please try again."));
-        xhr.send(file);
-      });
-      const {data:{publicUrl}} = client.storage.from(BUCKET).getPublicUrl(path);
-      const {error:insertError} = await client.from("media_files").insert({
-        title:$("media-title").value.trim(),description:$("media-description").value.trim(),
-        category,original_name:file.name,storage_path:path,public_url:publicUrl
-      });
-      if (insertError) throw insertError;
-      $("upload-status").textContent = "Success! Your file is now in the gallery.";
-      $("upload-form").reset(); bar.style.width = "100%";
-      await loadFiles();
-    } catch (err) {
-      $("upload-status").textContent = `Upload error: ${err.message}`;
-    } finally { button.disabled = false; }
-  });
+      // Refresh token so the latest custom claims are included.
+      await user.getIdToken(true);
+    } catch (error) {
+      console.error("Token refresh error:", error);
+    }
+  }
+});
 
-  loadFiles();
-})();
+// --------------------------------------------------
+// LOGIN FORM
+// --------------------------------------------------
+
+$("login-form")?.addEventListener("submit", async event => {
+  event.preventDefault();
+
+  const email = $("admin-email").value.trim();
+  const password = $("admin-password").value;
+
+  $("login-error").textContent = "Checking your login...";
+
+  try {
+    const result = await signInWithEmailAndPassword(
+      auth,
+      email,
+      password
+    );
+
+    await result.user.getIdToken(true);
+
+    $("login-error").textContent = "";
+    showAdmin(true);
+
+  } catch (error) {
+    console.error("Login error:", error);
+
+    $("login-error").textContent =
+      error.code === "auth/invalid-credential"
+        ? "Incorrect email or password."
+        : error.message;
+  }
+});
+
+// --------------------------------------------------
+// LOGOUT
+// --------------------------------------------------
+
+$("logout")?.addEventListener("click", async () => {
+  try {
+    await signOut(auth);
+    showAdmin(false);
+  } catch (error) {
+    console.error("Logout error:", error);
+  }
+});
+
+// --------------------------------------------------
+// UPLOAD MEDIA
+// --------------------------------------------------
+
+$("upload-form")?.addEventListener("submit", async event => {
+  event.preventDefault();
+
+  const file = $("media-file").files[0];
+
+  if (!file) {
+    $("upload-status").textContent = "Please select a file.";
+    return;
+  }
+
+  const user = auth.currentUser;
+
+  if (!user) {
+    showAdmin(false);
+    $("upload-status").textContent =
+      "Please sign in first.";
+
+    return;
+  }
+
+  const category = $("media-category").value;
+
+  const expectedType =
+    category === "Videos" ? "video/" :
+    category === "Audio" ? "audio/" :
+    "image/";
+
+  if (!file.type.startsWith(expectedType)) {
+    $("upload-status").textContent =
+      `Please select a valid ${category.toLowerCase()} file.`;
+
+    return;
+  }
+
+  const button = $("upload-button");
+  const bar = $("progress-bar");
+
+  button.disabled = true;
+
+  if (bar) bar.style.width = "10%";
+
+  $("upload-status").textContent = "Preparing upload...";
+
+  try {
+    // Refresh Firebase token before upload.
+    await user.getIdToken(true);
+
+    const safeName = file.name
+      .normalize("NFKD")
+      .replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .slice(-100);
+
+    const path = `${crypto.randomUUID()}-${safeName}`;
+
+    $("upload-status").textContent = "Uploading to Supabase...";
+
+    if (bar) bar.style.width = "40%";
+
+    // Upload actual file to Supabase Storage.
+    const { error: uploadError } =
+      await storageClient.storage
+        .from(BUCKET)
+        .upload(path, file, {
+          contentType: file.type || "application/octet-stream",
+          upsert: false
+        });
+
+    if (uploadError) throw uploadError;
+
+    if (bar) bar.style.width = "80%";
+
+    // Get public file URL.
+    const { data: publicData } =
+      storageClient.storage
+        .from(BUCKET)
+        .getPublicUrl(path);
+
+    const publicUrl = publicData.publicUrl;
+
+    // Save file information in Firestore.
+    await addDoc(collection(db, "media_files"), {
+      title: $("media-title").value.trim(),
+      description: $("media-description").value.trim(),
+      category: mediaKind(category),
+      original_name: file.name,
+      storage_path: path,
+      public_url: publicUrl,
+      created_at: serverTimestamp()
+    });
+
+    if (bar) bar.style.width = "100%";
+
+    $("upload-status").textContent =
+      "Success! Your file has been added to the gallery.";
+
+    $("upload-form").reset();
+
+    await loadFiles();
+
+  } catch (error) {
+    console.error("Upload error:", error);
+
+    $("upload-status").textContent =
+      "Upload error: " + error.message;
+
+  } finally {
+    button.disabled = false;
+  }
+});
+
+// --------------------------------------------------
+// START WEBSITE
+// --------------------------------------------------
+
+loadFiles();
